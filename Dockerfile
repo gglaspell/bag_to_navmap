@@ -1,4 +1,4 @@
-ARG ROS_IMAGE=ros:jazzy-ros-base
+ARG ROS_IMAGE=ros:rolling-ros-base
 FROM ${ROS_IMAGE}
 
 ARG NAVMAP_REF=rolling
@@ -10,9 +10,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     git \
     libeigen3-dev \
+    libpcl-dev \
     python3-pip \
     python3-colcon-common-extensions \
     python3-rosdep \
+    ros-rolling-pcl-conversions \
+    ros-rolling-pcl-ros \
+    ros-rolling-rviz-common \
+    ros-rolling-rviz-rendering \
+    ros-rolling-rviz-default-plugins \
     && rm -rf /var/lib/apt/lists/*
 
 RUN rosdep init 2>/dev/null || true
@@ -23,9 +29,9 @@ RUN git clone --branch ${NAVMAP_REF} https://github.com/EasyNavigation/NavMap.gi
 
 RUN mkdir -p /opt/navmap_ws/src/bag_to_navmap_helper/src
 
-# FIX: restored all XML tags that were stripped by HTML processing
 RUN cat > /opt/navmap_ws/src/bag_to_navmap_helper/package.xml <<'EOF'
 <?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>bag_to_navmap_helper</name>
   <version>0.1.0</version>
@@ -59,7 +65,7 @@ find_package(navmap_core REQUIRED)
 find_package(navmap_ros REQUIRED)
 
 add_executable(obj_to_navmap src/obj_to_navmap.cpp)
-ament_target_dependencies(obj_to_navmap navmap_core navmap_ros)
+target_link_libraries(obj_to_navmap navmap_core::navmap_core navmap_ros::navmap_ros)
 
 install(TARGETS obj_to_navmap
   DESTINATION lib/${PROJECT_NAME})
@@ -67,13 +73,8 @@ install(TARGETS obj_to_navmap
 ament_package()
 EOF
 
-# FIX: restored all #include <...> angle brackets, all template type parameters
-# <T>, all static_cast<T>, all function/struct opening braces {, and the
-# missing closing brace on the positive-index branch of parse_obj_index.
 RUN cat > /opt/navmap_ws/src/bag_to_navmap_helper/src/obj_to_navmap.cpp <<'EOF'
-#include <array>
 #include <charconv>
-#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -81,32 +82,28 @@ RUN cat > /opt/navmap_ws/src/bag_to_navmap_helper/src/obj_to_navmap.cpp <<'EOF'
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <vector>
 
-#include <Eigen/Core>
+#include <Eigen/Dense>
 
 #include "navmap_core/NavMap.hpp"
 #include "navmap_ros/navmap_io.hpp"
 
 namespace fs = std::filesystem;
 
-struct ObjMesh
-{
+struct ObjMesh {
   std::vector<Eigen::Vector3f> vertices;
   std::vector<std::array<uint32_t, 3>> triangles;
 };
 
-static std::string trim(const std::string & s)
-{
+static std::string trim(const std::string & s) {
   const auto begin = s.find_first_not_of(" \t\r\n");
   if (begin == std::string::npos) return "";
   const auto end = s.find_last_not_of(" \t\r\n");
   return s.substr(begin, end - begin + 1);
 }
 
-static std::vector<std::string> split_ws(const std::string & line)
-{
+static std::vector<std::string> split_ws(const std::string & line) {
   std::istringstream iss(line);
   std::vector<std::string> out;
   std::string token;
@@ -114,16 +111,14 @@ static std::vector<std::string> split_ws(const std::string & line)
   return out;
 }
 
-static std::optional<int> parse_int_sv(std::string_view sv)
-{
+static std::optional<int> parse_int_sv(std::string_view sv) {
   int value = 0;
   auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), value);
   if (ec != std::errc() || ptr != sv.data() + sv.size()) return std::nullopt;
   return value;
 }
 
-static std::optional<uint32_t> parse_obj_index(const std::string & token, size_t vertex_count)
-{
+static std::optional<uint32_t> parse_obj_index(const std::string & token, size_t vertex_count) {
   const auto slash = token.find('/');
   const std::string idx_str = (slash == std::string::npos) ? token : token.substr(0, slash);
   if (idx_str.empty()) return std::nullopt;
@@ -137,7 +132,7 @@ static std::optional<uint32_t> parse_obj_index(const std::string & token, size_t
     int zero_based = idx - 1;
     if (static_cast<size_t>(zero_based) >= vertex_count) return std::nullopt;
     return static_cast<uint32_t>(zero_based);
-  }  // FIX: closing brace was missing here
+  }
 
   int zero_based = static_cast<int>(vertex_count) + idx;
   if (zero_based < 0 || static_cast<size_t>(zero_based) >= vertex_count) return std::nullopt;
@@ -152,8 +147,7 @@ static bool is_degenerate(
   return (b - a).cross(c - a).norm() < 1e-9f;
 }
 
-static ObjMesh load_obj(const fs::path & path)
-{
+static ObjMesh load_obj(const fs::path & path) {
   std::ifstream in(path);
   if (!in.is_open()) {
     throw std::runtime_error("Failed to open OBJ: " + path.string());
@@ -204,8 +198,7 @@ static ObjMesh load_obj(const fs::path & path)
   return mesh;
 }
 
-int main(int argc, char ** argv)
-{
+int main(int argc, char ** argv) {
   if (argc < 3) {
     std::cerr << "Usage: obj_to_navmap INPUT.obj OUTPUT.navmap [SURFACE_NAME]\n";
     return 2;
@@ -254,13 +247,14 @@ int main(int argc, char ** argv)
 EOF
 
 WORKDIR /opt/navmap_ws
-RUN source /opt/ros/${ROS_DISTRO}/setup.bash && \
-    rosdep install --from-paths src --ignore-src -r -y && \
-    colcon build --packages-up-to bag_to_navmap_helper
+RUN rosdep install --from-paths src --ignore-src -r -y && \
+    source /opt/ros/${ROS_DISTRO}/setup.bash && \
+    colcon build --packages-up-to bag_to_navmap_helper && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
-RUN python3 -m pip install --no-cache-dir -r /app/requirements.txt
+RUN python3 -m pip install --no-cache-dir --break-system-packages -r /app/requirements.txt
 
 COPY entrypoint.sh /app/entrypoint.sh
 COPY bag_to_navmap.py /app/bag_to_navmap.py
