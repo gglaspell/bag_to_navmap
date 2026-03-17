@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 
 source /opt/ros/${ROS_DISTRO}/setup.bash
 source /opt/navmap_ws/install/setup.bash
