@@ -9,22 +9,19 @@ from pathlib import Path
 import numpy as np
 import open3d as o3d
 from rosbags.highlevel import AnyReader
+from rosbags.typesys import Stores, get_typestore
 from scipy.spatial.transform import Rotation
-
 
 HELPER_BIN = "/opt/navmap_ws/install/bag_to_navmap_helper/lib/bag_to_navmap_helper/obj_to_navmap"
 
-
 def stamp_to_sec(stamp) -> float:
     return float(stamp.sec) + float(stamp.nanosec) * 1e-9
-
 
 def make_transform_xyzquat(x, y, z, qx, qy, qz, qw):
     T = np.eye(4, dtype=np.float64)
     T[:3, :3] = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
     T[:3, 3] = [x, y, z]
     return T
-
 
 def inverse_tf(T):
     out = np.eye(4, dtype=np.float64)
@@ -33,7 +30,6 @@ def inverse_tf(T):
     out[:3, :3] = R.T
     out[:3, 3] = -R.T @ t
     return out
-
 
 def nearest_time_index(times, t):
     pos = bisect_left(times, t)
@@ -45,13 +41,11 @@ def nearest_time_index(times, t):
     after = pos
     return before if abs(times[before] - t) <= abs(times[after] - t) else after
 
-
 def field_offsets(fields):
     out = {}
     for f in fields:
         out[f.name] = (f.offset, f.datatype, f.count)
     return out
-
 
 def pointcloud2_to_xyz(msg) -> np.ndarray:
     fmap = field_offsets(msg.fields)
@@ -63,7 +57,7 @@ def pointcloud2_to_xyz(msg) -> np.ndarray:
     yoff, ydt, _ = fmap["y"]
     zoff, zdt, _ = fmap["z"]
 
-    if not (xdt == ydt == zdt == 7):  # FLOAT32
+    if not (xdt == ydt == zdt == 7): # FLOAT32
         raise ValueError("Only FLOAT32 x/y/z fields are supported")
 
     data = bytes(msg.data)
@@ -85,16 +79,19 @@ def pointcloud2_to_xyz(msg) -> np.ndarray:
     xyz = xyz[np.isfinite(xyz).all(axis=1)]
     return xyz
 
-
 def load_bag_streams(bag_path: Path, pc_topic: str, odom_topic: str | None):
     point_frames = []
     odom_samples = []
 
-    with AnyReader([bag_path]) as reader:
+    # Initialize a default type store for standard ROS 2 messages
+    typestore = get_typestore(Stores.ROS2_HUMBLE)
+
+    with AnyReader([bag_path], default_typestore=typestore) as reader:
         wanted = [
             c for c in reader.connections
             if c.topic == pc_topic or (odom_topic and c.topic == odom_topic)
         ]
+        
         if not wanted:
             raise RuntimeError("No matching topics found in bag")
 
@@ -121,7 +118,6 @@ def load_bag_streams(bag_path: Path, pc_topic: str, odom_topic: str | None):
     odom_samples.sort(key=lambda x: x[0])
     return point_frames, odom_samples
 
-
 def attach_initial_odom(point_frames, odom_samples, odom_max_latency):
     if not odom_samples:
         for fr in point_frames:
@@ -136,12 +132,10 @@ def attach_initial_odom(point_frames, odom_samples, odom_max_latency):
         dt = abs(times[idx] - fr["time"])
         fr["odom"] = Ts[idx] if dt <= odom_max_latency else None
 
-
 def make_o3d_cloud(xyz: np.ndarray):
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(xyz.astype(np.float64))
     return pcd
-
 
 def preprocess_cloud(xyz: np.ndarray, voxel_size: float):
     pcd = make_o3d_cloud(xyz)
@@ -151,10 +145,9 @@ def preprocess_cloud(xyz: np.ndarray, voxel_size: float):
     radius_normal = max(voxel_size * 2.0, 0.05)
     pcd.estimate_normals(
         o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30)
-    )  # FIX: was missing closing )
+    )
     pcd.normalize_normals()
     return pcd
-
 
 def icp_register(source, target, init, dist_thresh):
     result = o3d.pipelines.registration.registration_icp(
@@ -164,12 +157,11 @@ def icp_register(source, target, init, dist_thresh):
         init,
         o3d.pipelines.registration.TransformationEstimationPointToPlane(),
         o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=50),
-    )  # FIX: was missing closing )
+    )
     info = o3d.pipelines.registration.get_information_matrix_from_point_clouds(
         source, target, dist_thresh, result.transformation
-    )  # FIX: was missing closing )
+    )
     return result, info
-
 
 def maybe_add_loop_closure(
     idx,
@@ -202,8 +194,7 @@ def maybe_add_loop_closure(
                 o3d.pipelines.registration.PoseGraphEdge(
                     j, idx, result.transformation, info, uncertain=True
                 )
-            )  # FIX: was missing )) on PoseGraphEdge and append
-
+            )
 
 def build_pose_graph(
     frames,
@@ -232,7 +223,7 @@ def build_pose_graph(
         if len(src.points) == 0 or len(tgt.points) == 0:
             pose_graph.nodes.append(
                 o3d.pipelines.registration.PoseGraphNode(np.linalg.inv(odometry))
-            )  # FIX: was missing closing ))
+            )
             continue
 
         odom_prev = frames[i - 1].get("odom")
@@ -251,23 +242,23 @@ def build_pose_graph(
                 odometry = odometry @ T_curr_prev
                 pose_graph.nodes.append(
                     o3d.pipelines.registration.PoseGraphNode(np.linalg.inv(odometry))
-                )  # FIX: was missing closing ))
+                )
             else:
                 pose_graph.nodes.append(
                     o3d.pipelines.registration.PoseGraphNode(np.linalg.inv(odometry))
-                )  # FIX: was missing closing ))
+                )
             continue
 
         accepted.append(i)
         odometry = result.transformation @ odometry
         pose_graph.nodes.append(
             o3d.pipelines.registration.PoseGraphNode(np.linalg.inv(odometry))
-        )  # FIX: was missing closing ))
+        )
         pose_graph.edges.append(
             o3d.pipelines.registration.PoseGraphEdge(
                 i - 1, i, result.transformation, info, uncertain=False
             )
-        )  # FIX: was missing )) on PoseGraphEdge and append
+        )
 
         if enable_loop_closure:
             maybe_add_loop_closure(
@@ -280,23 +271,22 @@ def build_pose_graph(
                 loop_closure_radius,
                 loop_closure_search_interval,
                 loop_closure_fitness_thresh,
-            )  # FIX: was missing closing )
+            )
 
     option = o3d.pipelines.registration.GlobalOptimizationOption(
         max_correspondence_distance=icp_dist_thresh,
         edge_prune_threshold=0.25,
         preference_loop_closure=1.5 if enable_loop_closure else 0.1,
         reference_node=0,
-    )  # FIX: was missing closing )
+    )
     o3d.pipelines.registration.global_optimization(
         pose_graph,
         o3d.pipelines.registration.GlobalOptimizationLevenbergMarquardt(),
         o3d.pipelines.registration.GlobalOptimizationConvergenceCriteria(),
         option,
-    )  # FIX: was missing closing )
+    )
 
     return processed, pose_graph, accepted
-
 
 def merge_global_cloud(frames, pose_graph, voxel_size):
     merged = o3d.geometry.PointCloud()
@@ -312,10 +302,9 @@ def merge_global_cloud(frames, pose_graph, voxel_size):
     radius_normal = max(voxel_size * 2.5, 0.05)
     merged.estimate_normals(
         o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30)
-    )  # FIX: was missing closing )
+    )
     merged.normalize_normals()
     return merged
-
 
 def level_cloud_to_floor(cloud: o3d.geometry.PointCloud):
     plane, inliers = cloud.segment_plane(
@@ -342,11 +331,10 @@ def level_cloud_to_floor(cloud: o3d.geometry.PointCloud):
     cloud.transform(T)
     return cloud
 
-
 def poisson_mesh_from_cloud(cloud, poisson_depth, density_trim_percentile, decimate_target):
     mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
         cloud, depth=poisson_depth
-    )  # FIX: was missing closing )
+    )
     densities = np.asarray(densities)
     if densities.size == 0:
         raise RuntimeError("Poisson reconstruction returned no density values")
@@ -376,20 +364,17 @@ def poisson_mesh_from_cloud(cloud, poisson_depth, density_trim_percentile, decim
     mesh.compute_vertex_normals()
     return mesh
 
-
 def run_navmap_export(mesh_obj_path: Path, navmap_path: Path, surface_name: str):
     cmd = [HELPER_BIN, str(mesh_obj_path), str(navmap_path), surface_name]
     subprocess.run(cmd, check=True)
 
-
 def output_stem_for_bag(bag_path: Path) -> str:
     return bag_path.name
-
 
 def main():
     parser = argparse.ArgumentParser(
         description="Convert a ROS 2 bag with PointCloud2 data into PLY, OBJ, and binary NavMap output."
-    )  # FIX: was missing closing )
+    )
     parser.add_argument("bag_path", help="Path to ROS 2 bag")
     parser.add_argument("output_dir", help="Output directory")
     parser.add_argument("--pc_topic", default="/points", help="PointCloud2 topic")
@@ -430,7 +415,7 @@ def main():
         loop_closure_radius=args.loop_closure_radius,
         loop_closure_fitness_thresh=args.loop_closure_fitness_thresh,
         loop_closure_search_interval=args.loop_closure_search_interval,
-    )  # FIX: was missing closing )
+    )
 
     if len(accepted) < 2:
         raise RuntimeError("Registration failed: too few accepted frames")
@@ -454,7 +439,7 @@ def main():
         poisson_depth=args.poisson_depth,
         density_trim_percentile=args.density_trim_percentile,
         decimate_target=args.decimate_target,
-    )  # FIX: was missing closing )
+    )
 
     if len(mesh.vertices) == 0 or len(mesh.triangles) == 0:
         raise RuntimeError("Mesh generation failed")
@@ -463,9 +448,8 @@ def main():
     run_navmap_export(obj_path, navmap_path, args.surface_name)
 
     print(f"Wrote point cloud: {ply_path}", flush=True)
-    print(f"Wrote mesh:        {obj_path}", flush=True)
-    print(f"Wrote NavMap:      {navmap_path}", flush=True)
-
+    print(f"Wrote mesh: {obj_path}", flush=True)
+    print(f"Wrote NavMap: {navmap_path}", flush=True)
 
 if __name__ == "__main__":
     main()
