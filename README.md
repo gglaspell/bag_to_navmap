@@ -113,6 +113,13 @@ Look for:
 
 ---
 
+
+## 🔥 New!
+How to Run the GUI launcher
+```
+python3 bag_to_navmap_gui.py 
+```
+
 ## All Parameters
 
 | Parameter | Default | Description |
