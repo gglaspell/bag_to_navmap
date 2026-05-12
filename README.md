@@ -20,7 +20,7 @@ three output files:
 | `*.navmap` | Binary NavMap file ready to load into EasyNavigation |
 
 **Design philosophy:** Accuracy over speed. Built for offline post-processing
-where quality matters more than real-time performance.
+where quality matters more than real-time performance. The NavMap file can then be loaded using the [navmap_file_loader](https://github.com/gglaspell/navmap_file_loader) package.
 
 ---
 
@@ -253,7 +253,7 @@ not use it for multi-story buildings or terrain with elevation changes.
 
 ## Loading the `.navmap` File into EasyNavigation
 
-Loading the output back into EasyNavigation will be covered in a future update.
+The NavMap file can then be loaded using the [navmap_file_loader](https://github.com/gglaspell/navmap_file_loader) package.
 
 ---
 
